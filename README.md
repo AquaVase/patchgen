@@ -48,7 +48,8 @@ You can use `-Porg.gradle.java.installations.paths=...` to specify the JDK path.
 | `restoreSourceFromPatches` | Restores only patched and added Java files into `sourcesDirectory` using mapped MCP sources |
 | `syncSources` | Copies the configured overlay to src/resources                                                                          |
 | `compileGame` | Prepares the Minecraft dependency, syncs user overlays, and compiles user code |
-| `runClient` / `runServer` | Runs the compiled output via this project's JavaExec; the client uses ForgeGradle resources and natives                 |
+| `copyAssets` | Downloads and copies Minecraft assets into `runDirectory/assets` |
+| `runClient` / `runServer` | Launches Minecraft with user output and the mapped library; the client prepares assets/natives and the server forwards console input |
 | `generatePatches` | Encodes baseJar and modifiedJar into a patch archive, and verifies restoration entry by entry and for the whole archive |
 | `restoreArchive` | Restores baseJar and inputArchive to `build/patchgen/restored.jar`                                                      |
 
@@ -59,6 +60,27 @@ The library is compiled from ForgeGradle's mapped MCP source archive and stored 
 The project's `jar` still contains user output only; merging a complete target archive and reobfuscation for `generatePatches` are not implemented. For a complete binary-patch target, configure `modifiedJar` explicitly.
 
 If you need to preserve overlays, you can configure `sourceOverlays.from('sources')` and `resourceOverlays.from('resources')`; in that case you should edit the overlay files, and subsequent syncs will overwrite the corresponding generated files. Deleting an overlay file will not automatically delete the old file in the generated directory.
+
+## Launch Minecraft
+
+```powershell
+./gradlew runClient
+./gradlew runServer
+```
+
+These tasks compile user code and prepare the Minecraft library automatically, without extracting sources or restoring source patches. The client downloads assets and copies them to `run/assets`, extracts native libraries, then launches `net.minecraft.client.main.Main` with the configured Java toolchain. Its arguments include the game version, game directory, local asset directory, asset-index ID read from Minecraft metadata, and the development access token `0`. Following MCP-Reborn's launch configuration, it uses `-XX:StackShadowPages=32`, plus `-XstartOnFirstThread` on macOS.
+
+The client working directory defaults to `run`; the server uses `run/server` and accepts console input. Both follow `patchgen.runDirectory`. `setupWorkspace` also copies assets, and `copyAssets` can be invoked separately. Additional client arguments can be supplied with `./gradlew runClient --args="--username Developer"` or through the normal Gradle JavaExec configuration:
+
+```groovy
+tasks.named('runClient', JavaExec) {
+    maxHeapSize = '4g'
+    args '--username', 'Developer'
+}
+tasks.named('runServer', JavaExec) {
+    args '--nogui'
+}
+```
 
 ## Source patches
 

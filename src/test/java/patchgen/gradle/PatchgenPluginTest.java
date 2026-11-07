@@ -58,10 +58,83 @@ public class PatchgenPluginTest {
         assertFalse(setup.contains(":extractMapped SKIPPED"));
         assertTrue(setup.contains(":minecraftLibraryJar SKIPPED"));
         assertTrue(setup.contains(":minecraftLibrarySourcesJar SKIPPED"));
+        assertTrue(setup.contains(":copyAssets SKIPPED"));
         String run=runner("runClient","--dry-run").build().getOutput();
         assertFalse(run.contains(":extractMapped SKIPPED"));
         assertTrue(run.contains(":prepareMinecraftLibrary SKIPPED"));
+        assertTrue(run.contains(":copyAssets SKIPPED"));
+        assertTrue(run.contains(":extractNatives SKIPPED"));
         assertTrue(run.contains(":runClient SKIPPED"));
+    }
+
+    @Test public void gameLaunchUsesLocalAssetsNativesJvmArgumentsAndRuntimeLibrary() throws Exception {
+        ArchiveIO.write(project.resolve("mapped-sources.jar"),Map.of("library/Marker.java",
+            "package library; public class Marker { public static String value() { return \"runtime-library\"; } }".getBytes()));
+        Path assets=project.resolve("fixture-assets/indexes");Files.createDirectories(assets);
+        Files.writeString(assets.resolve("fixture.json"),"{}");
+        Path natives=project.resolve("fixture-natives");Files.createDirectories(natives);
+        Files.writeString(project.resolve("fixture-version.json"),"{\"assetIndex\":{\"id\":\"fixture\"}}");
+        Path source=project.resolve("src/main/java/demo/LaunchProbe.java");Files.createDirectories(source.getParent());
+        Files.writeString(source,"""
+            package demo;
+            import java.nio.file.*;
+            import java.util.*;
+            public class LaunchProbe {
+                public static void main(String[] args) throws Exception {
+                    if (!library.Marker.value().equals("runtime-library")) throw new AssertionError("runtime classpath");
+                    Path cwd = Path.of("").toAbsolutePath();
+                    if (args.length == 0) {
+                        if (!cwd.endsWith("custom run/server")) throw new AssertionError(cwd);
+                        System.out.println("SERVER_LAUNCH_OK");
+                        return;
+                    }
+                    var options = new HashMap<String,String>();
+                    for (int i=0;i<args.length;i+=2) options.put(args[i],args[i+1]);
+                    if (!cwd.endsWith("custom run")) throw new AssertionError(cwd);
+                    if (!Path.of(options.get("--gameDir")).equals(cwd)) throw new AssertionError(options);
+                    if (!options.get("--version").equals("26.2")) throw new AssertionError(options);
+                    if (!options.get("--accessToken").equals("0")) throw new AssertionError(options);
+                    if (!options.get("--assetIndex").equals("fixture")) throw new AssertionError(options);
+                    if (!options.get("--username").equals("PatchgenTest")) throw new AssertionError(options);
+                    Path assets = Path.of(options.get("--assetsDir"));
+                    if (!assets.equals(cwd.resolve("assets"))) throw new AssertionError(assets);
+                    if (!Files.isRegularFile(assets.resolve("indexes/fixture.json"))) throw new AssertionError("assets not copied");
+                    if (!Path.of(System.getProperty("java.library.path")).endsWith("fixture-natives")) throw new AssertionError("native path");
+                    if (!java.lang.management.ManagementFactory.getRuntimeMXBean().getInputArguments().contains("-XX:StackShadowPages=32")) throw new AssertionError("JVM options");
+                    System.out.println("CLIENT_LAUNCH_OK");
+                }
+            }
+            """);
+        Files.writeString(project.resolve("build.gradle"),"""
+
+            abstract class FixtureDownloadAssets extends net.minecraftforge.gradle.common.tasks.DownloadAssets {
+                @Override File getOutput() { return project.file('fixture-assets') }
+            }
+            tasks.replace('downloadAssets', FixtureDownloadAssets).configure {
+                enabled = false
+                meta = file('fixture-version.json')
+            }
+            tasks.named('extractNatives') { enabled = false; output = file('fixture-natives') }
+            patchgen {
+                runDirectory = layout.projectDirectory.dir('custom run')
+                clientMainClass = 'demo.LaunchProbe'
+                serverMainClass = 'demo.LaunchProbe'
+            }
+            tasks.named('srg2mcp') {
+                enabled = false
+                input = file('mapped-sources.jar')
+                mappings = file('mapped-sources.jar')
+                output = file('mapped-sources.jar')
+            }
+            afterEvaluate { configurations.minecraftImplementation.dependencies.clear() }
+            tasks.named('runClient') { args '--username', 'PatchgenTest' }
+            """,StandardOpenOption.APPEND);
+        var client=runner("runClient").build();
+        assertTrue(client.getOutput().contains("CLIENT_LAUNCH_OK"));
+        assertNull(client.task(":extractMapped"));assertNull(client.task(":restoreSourceFromPatches"));
+        var server=runner("runServer").build();
+        assertTrue(server.getOutput().contains("SERVER_LAUNCH_OK"));
+        assertNull(server.task(":copyAssets"));assertNull(server.task(":extractNatives"));
     }
 
     @Test public void mappedLibrarySupportsCompilationSourceAttachmentAndUserOverrides() throws Exception {

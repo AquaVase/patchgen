@@ -85,17 +85,22 @@ public class PatchgenPlugin implements Plugin<Project> {
         project.getTasks().named("processResources").configure(task->task.dependsOn(sync));
         var minecraftLibrary=minecraftLibrary(project,ext,project.getExtensions().getByType(JavaToolchainService.class));
         project.getTasks().named("compileJava").configure(task->task.dependsOn(minecraftLibrary));
+        var assets=project.getTasks().named("downloadAssets",DownloadAssets.class);
+        var copyAssets=project.getTasks().register("copyAssets",Copy.class,task->{
+            task.setGroup("patchgen");task.setDescription("Download and copy Minecraft assets into the run directory.");
+            task.dependsOn(assets);task.from(assets.map(DownloadAssets::getOutput));
+            task.into(ext.getRunDirectory().dir("assets"));
+        });
         project.getTasks().register("setupWorkspace",task->{
             task.setGroup("patchgen");task.setDescription("Build the Minecraft dependency and attached sources, download assets and overlay user sources.");
-            task.dependsOn(minecraftLibrary,"downloadAssets",sync);
+            task.dependsOn(minecraftLibrary,copyAssets,sync);
         });
         project.getTasks().register("compileGame",task->{task.setGroup("patchgen");task.dependsOn("classes");});
-        var assets=project.getTasks().named("downloadAssets",DownloadAssets.class);
         var natives=project.getTasks().named("extractNatives",ExtractNatives.class);
         var toolchains=project.getExtensions().getByType(JavaToolchainService.class);
         project.getTasks().register("runClient",JavaExec.class,task->{
             task.setGroup("patchgen");task.setDescription("Run the compiled client in this Gradle build.");
-            task.dependsOn("classes",assets,natives);
+            task.dependsOn("classes",copyAssets,natives);
             task.getMainClass().set(ext.getClientMainClass());task.setClasspath(main.get().getRuntimeClasspath());
             task.getJavaLauncher().set(toolchains.launcherFor(spec->spec.getLanguageVersion().set(ext.getJavaVersion().map(JavaLanguageVersion::of))));
             task.doFirst(t->{
@@ -104,13 +109,16 @@ public class PatchgenPlugin implements Plugin<Project> {
                 try { metadata=Utils.loadJson(assets.get().getMeta().get().getAsFile(),VersionJson.class); }
                 catch(java.io.IOException e) { throw new GradleException("Cannot read Minecraft asset metadata",e); }
                 task.args("--gameDir",run.getAbsolutePath(),"--version",ext.getMinecraftVersion().get(),
-                    "--assetsDir",assets.get().getOutput().getAbsolutePath(),"--assetIndex",metadata.assetIndex.id,"--accessToken","0");
+                    "--assetsDir",copyAssets.get().getDestinationDir().getAbsolutePath(),"--assetIndex",metadata.assetIndex.id,"--accessToken","0");
                 task.systemProperty("java.library.path",natives.get().getOutput().get().getAsFile().getAbsolutePath());
             });
+            task.jvmArgs("-XX:StackShadowPages=32");
             if(System.getProperty("os.name").toLowerCase().contains("mac"))task.jvmArgs("-XstartOnFirstThread");
         });
         project.getTasks().register("runServer",JavaExec.class,task->{
-            task.setGroup("patchgen");task.dependsOn("classes");task.getMainClass().set(ext.getServerMainClass());
+            task.setGroup("patchgen");task.setDescription("Run the compiled server with interactive console input.");
+            task.dependsOn("classes");task.getMainClass().set(ext.getServerMainClass());
+            task.setStandardInput(System.in);
             task.setClasspath(main.get().getRuntimeClasspath());
             task.getJavaLauncher().set(toolchains.launcherFor(spec->spec.getLanguageVersion().set(ext.getJavaVersion().map(JavaLanguageVersion::of))));
             task.doFirst(t->{File run=ext.getRunDirectory().dir("server").get().getAsFile();run.mkdirs();task.setWorkingDir(run);});
