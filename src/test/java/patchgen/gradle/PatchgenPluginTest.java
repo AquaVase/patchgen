@@ -70,6 +70,24 @@ public class PatchgenPluginTest {
         ArchiveIO.equal(ArchiveIO.read(target),ArchivePatches.restore(base,project.resolve("build/patchgen/patches.jar"),""));
     }
 
+    @Test public void baseJarDefaultsToMinecraftClientForBothBinaryTasks() throws Exception {
+        Files.writeString(project.resolve("build.gradle"),"""
+
+            tasks.register('inspectBaseJar') {
+                doLast {
+                    def client = patchgen.baseJar.get().asFile
+                    assert client.isFile()
+                    assert client.name == 'client.jar'
+                    assert client.parentFile.name == patchgen.minecraftVersion.get()
+                    assert tasks.generatePatches.baseJar.get().asFile == client
+                    assert tasks.restoreArchive.baseJar.get().asFile == client
+                    println 'DEFAULT_CLIENT_BASE_JAR'
+                }
+            }
+            """,StandardOpenOption.APPEND);
+        assertTrue(runner("inspectBaseJar").build().getOutput().contains("DEFAULT_CLIENT_BASE_JAR"));
+    }
+
     @Test public void missingSettingsPluginFailsClearly() throws Exception {
         Files.writeString(project.resolve("settings.gradle"),"rootProject.name='game'");
         assertTrue(runner("help").buildAndFail().getOutput().contains("Apply 'patchgen.settings'"));

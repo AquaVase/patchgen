@@ -9,6 +9,7 @@ import net.minecraftforge.gradle.patcher.PatcherExtension;
 import net.minecraftforge.gradle.common.tasks.DownloadAssets;
 import net.minecraftforge.gradle.common.tasks.ExtractNatives;
 import net.minecraftforge.gradle.common.util.Utils;
+import net.minecraftforge.gradle.common.util.MavenArtifactDownloader;
 import net.minecraftforge.gradle.common.util.VersionJson;
 import org.gradle.api.*;
 import org.gradle.api.plugins.JavaPluginExtension;
@@ -42,6 +43,12 @@ public class PatchgenPlugin implements Plugin<Project> {
         mcp.setConfig(ext.getMcpConfig());mcp.getPipeline().set(ext.getPipeline());
         parent.getExtensions().getByType(JavaPluginExtension.class).getToolchain().getLanguageVersion().set(ext.getJavaVersion().map(JavaLanguageVersion::of));
         project.getPluginManager().apply(PatcherPlugin.class);
+        ext.getBaseJar().convention(project.getLayout().file(ext.getMinecraftVersion().map(version->{
+            File client=MavenArtifactDownloader.generate(project,"net.minecraft:client:"+version,true);
+            if(client==null||!client.isFile())
+                throw new GradleException("Cannot resolve Minecraft client JAR for version "+version);
+            return client;
+        })));
         project.getPluginManager().apply("idea");
         var patcher=project.getExtensions().getByType(PatcherExtension.class);
         patcher.getParent().set(parent);patcher.getMcVersion().set(ext.getMinecraftVersion());

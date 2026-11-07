@@ -3,6 +3,7 @@ patchgen {
     minecraftVersion = '1.21.1'
     mcpConfig = '1.21.1-20240808.144430'
     javaVersion = 21
-    baseJar = file('inputs/base.jar')
+    // Defaults to the MCP Minecraft client JAR.
+    // baseJar = file('inputs/base.jar')
     outputArchive = layout.buildDirectory.file('patches.jar')
 }

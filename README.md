@@ -28,7 +28,8 @@ patchgen {
     minecraftVersion = '1.21.1'
     mcpConfig = '1.21.1-20240808.144430'
     javaVersion = 21
-    baseJar = file('inputs/base.jar')
+    // baseJar defaults to the MCP Minecraft client JAR; override it if needed:
+    // baseJar = file('inputs/base.jar')
     outputArchive = layout.buildDirectory.file('patches.jar')
     // By default, patches are generated against the current project's jar output; you can also specify a separate target JAR:
     // modifiedJar = file('inputs/modified.jar')
@@ -62,7 +63,7 @@ If you need to preserve overlays, you can configure `sourceOverlays.from('source
 | `javaVersion` | 21; toolchain for game compilation and runtime |
 | `sourcesDirectory`, `runDirectory` | `src/main/java`, `run` |
 | `clientMainClass`, `serverMainClass` | `net.minecraft.client.main.Main`, `net.minecraft.server.Main` |
-| `baseJar` | Patch baseline JAR; required for patch tasks |
+| `baseJar` | Patch baseline JAR; defaults to the original Minecraft client JAR resolved and cached by ForgeGradle for `minecraftVersion` |
 | `modifiedJar` | The output of this project's `jar`; supports task providers and automatically establishes task dependencies |
 | `outputArchive` | `build/patchgen/patches.jar` |
 | `inputArchive` | Optional; an existing patch archive. When generating, its restore entries are preserved and the selected targets are overwritten |
