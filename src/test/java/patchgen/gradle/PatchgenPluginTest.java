@@ -53,12 +53,62 @@ public class PatchgenPluginTest {
         assertTrue(runner("inspectPatchgen").build().getOutput().contains("FORGEGRADLE_REQUIRED_AND_SAME_BUILD"));
     }
 
-    @Test public void setupOrdersExtractionBeforeOverlayAndRunDoesNotExtract() {
+    @Test public void setupAndRunUseLibraryWithoutExtractingSources() {
         String setup=runner("setupWorkspace","--dry-run").build().getOutput();
-        assertTrue(setup.indexOf(":extractMapped SKIPPED")<setup.indexOf(":syncSources SKIPPED"));
+        assertFalse(setup.contains(":extractMapped SKIPPED"));
+        assertTrue(setup.contains(":minecraftLibraryJar SKIPPED"));
+        assertTrue(setup.contains(":minecraftLibrarySourcesJar SKIPPED"));
         String run=runner("runClient","--dry-run").build().getOutput();
-        assertFalse(run.contains(":extractMapped SKIPPED"));assertFalse(run.contains(":setupMCP SKIPPED"));
+        assertFalse(run.contains(":extractMapped SKIPPED"));
+        assertTrue(run.contains(":prepareMinecraftLibrary SKIPPED"));
         assertTrue(run.contains(":runClient SKIPPED"));
+    }
+
+    @Test public void mappedLibrarySupportsCompilationSourceAttachmentAndUserOverrides() throws Exception {
+        ArchiveIO.write(project.resolve("mapped-sources.jar"),Map.of(
+            "net/minecraft/Example.java","package net.minecraft; public class Example { public static String value() { return \"library\"; } }".getBytes(),
+            "sample-resource.txt","resource".getBytes()));
+        Path source=project.resolve("src/main/java/demo/Main.java");Files.createDirectories(source.getParent());
+        Files.writeString(source,"package demo; public class Main { public static void main(String[] args) { System.out.println(net.minecraft.Example.value()); } }");
+        Files.writeString(project.resolve("build.gradle"),"""
+
+            tasks.named('srg2mcp') {
+                enabled = false
+                input = file('mapped-sources.jar')
+                mappings = file('mapped-sources.jar')
+                output = file('mapped-sources.jar')
+            }
+            afterEvaluate { configurations.minecraftImplementation.dependencies.clear() }
+            tasks.register('runLibraryExample', JavaExec) {
+                dependsOn tasks.classes
+                classpath = sourceSets.main.runtimeClasspath
+                mainClass = 'demo.Main'
+                javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
+            }
+            tasks.register('inspectLibrarySources') {
+                dependsOn tasks.prepareMinecraftLibrary
+                doLast {
+                    def result = dependencies.createArtifactResolutionQuery()
+                        .forModule('patchgen.local', 'minecraft', 'mapped')
+                        .withArtifacts(org.gradle.jvm.JvmLibrary, org.gradle.language.base.artifact.SourcesArtifact)
+                        .execute()
+                    def artifacts = result.resolvedComponents.collectMany {
+                        it.getArtifacts(org.gradle.language.base.artifact.SourcesArtifact)
+                    }
+                    assert artifacts.size() == 1
+                    assert artifacts.first().file.name == 'minecraft-mapped-sources.jar'
+                }
+            }
+            """,StandardOpenOption.APPEND);
+        assertTrue(runner("runLibraryExample","inspectLibrarySources").build().getOutput().contains("library"));
+        assertFalse(Files.exists(project.resolve("src/main/java/net/minecraft/Example.java")));
+        var library=ArchiveIO.read(project.resolve(".patchgen/library/patchgen/local/minecraft/mapped/minecraft-mapped.jar"));
+        assertTrue(library.containsKey("net/minecraft/Example.class"));
+        assertTrue(library.containsKey("sample-resource.txt"));
+        assertFalse(library.containsKey("net/minecraft/Example.java"));
+        Path override=project.resolve("src/main/java/net/minecraft/Example.java");Files.createDirectories(override.getParent());
+        Files.writeString(override,"package net.minecraft; public class Example { public static String value() { return \"user-override\"; } }");
+        assertTrue(runner("runLibraryExample").build().getOutput().contains("user-override"));
     }
 
     @Test public void binaryTasksWorkOnNonMinecraftArchivesWithoutRunningCompiler() throws Exception {

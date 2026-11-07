@@ -7,6 +7,7 @@ import net.minecraftforge.gradle.mcp.MCPExtension;
 import net.minecraftforge.gradle.patcher.PatcherPlugin;
 import net.minecraftforge.gradle.patcher.PatcherExtension;
 import net.minecraftforge.gradle.common.tasks.DownloadAssets;
+import net.minecraftforge.gradle.common.tasks.ApplyMappings;
 import net.minecraftforge.gradle.common.tasks.ExtractNatives;
 import net.minecraftforge.gradle.common.util.Utils;
 import net.minecraftforge.gradle.common.util.MavenArtifactDownloader;
@@ -65,13 +66,14 @@ public class PatchgenPlugin implements Plugin<Project> {
             task.getSourceOverlays().from(ext.getSourceOverlays());task.getResourceOverlays().from(ext.getResourceOverlays());
             task.getSourcesDirectory().set(ext.getSourcesDirectory());
             task.getResourcesDirectory().set(project.getLayout().getProjectDirectory().dir("src/main/resources"));
-            task.mustRunAfter("extractMapped");
         });
         project.getTasks().named("compileJava").configure(task->task.dependsOn(sync));
         project.getTasks().named("processResources").configure(task->task.dependsOn(sync));
-        var setup=project.getTasks().register("setupWorkspace",task->{
-            task.setGroup("patchgen");task.setDescription("Extract ForgeGradle game sources, download assets and overlay sources (overwrites generated sources).");
-            task.dependsOn("extractMapped","downloadAssets",sync);
+        var minecraftLibrary=minecraftLibrary(project,ext,project.getExtensions().getByType(JavaToolchainService.class));
+        project.getTasks().named("compileJava").configure(task->task.dependsOn(minecraftLibrary));
+        project.getTasks().register("setupWorkspace",task->{
+            task.setGroup("patchgen");task.setDescription("Build the Minecraft dependency and attached sources, download assets and overlay user sources.");
+            task.dependsOn(minecraftLibrary,"downloadAssets",sync);
         });
         project.getTasks().register("compileGame",task->{task.setGroup("patchgen");task.dependsOn("classes");});
         var assets=project.getTasks().named("downloadAssets",DownloadAssets.class);
@@ -104,6 +106,45 @@ public class PatchgenPlugin implements Plugin<Project> {
         binary(project,ext,"generatePatches","generate").configure(task->task.getModifiedJar().set(ext.getModifiedJar()));
         binary(project,ext,"restoreArchive","restore").configure(task->{
             task.getOutputArchive().set(project.getLayout().getBuildDirectory().file("patchgen/restored.jar"));
+        });
+    }
+
+    private TaskProvider<Task> minecraftLibrary(Project project,PatchgenExtension ext,JavaToolchainService toolchains) {
+        // The joined MCP pipeline inserts OnlyIn/Dist annotations into the merged sources.
+        project.getDependencies().add("minecraftImplementation","net.minecraftforge:mergetool:1.1.7:api");
+        var mapped=project.getTasks().named("srg2mcp",ApplyMappings.class).flatMap(ApplyMappings::getOutput);
+        var sources=mapped.map(file->project.zipTree(file.getAsFile()));
+        var compile=project.getTasks().register("compileMinecraftLibrary",JavaCompile.class,task->{
+            task.setGroup("patchgen");task.setDescription("Compile mapped MCP sources as a separate Minecraft library.");
+            task.source(sources.map(tree->tree.matching(pattern->pattern.include("**/*.java"))));
+            task.setClasspath(project.getConfigurations().getByName("minecraftImplementation"));
+            task.getDestinationDirectory().set(project.getLayout().getBuildDirectory().dir("patchgen/minecraft/classes"));
+            task.getJavaCompiler().set(toolchains.compilerFor(spec->spec.getLanguageVersion().set(ext.getJavaVersion().map(JavaLanguageVersion::of))));
+            task.getOptions().getCompilerArgs().add("-proc:none");
+        });
+        // A Maven-layout dependency allows Gradle IDE imports to discover the matching sources classifier.
+        var repository=project.getLayout().getProjectDirectory().dir(".patchgen/library");
+        project.getRepositories().exclusiveContent(content->{
+            content.forRepository(()->project.getRepositories().maven(repo->{
+                repo.setName("patchgenMinecraftLibrary");repo.setUrl(repository);
+                repo.metadataSources(metadata->metadata.artifact());
+            }));
+            content.filter(filter->filter.includeGroup("patchgen.local"));
+        });
+        var libraryDir=repository.dir("patchgen/local/minecraft/mapped");
+        var libraryJar=project.getTasks().register("minecraftLibraryJar",Jar.class,task->{
+            task.setGroup("patchgen");task.getDestinationDirectory().set(libraryDir);
+            task.getArchiveFileName().set("minecraft-mapped.jar");
+            task.from(compile.flatMap(JavaCompile::getDestinationDirectory));
+            task.from(sources,copy->copy.exclude("**/*.java","META-INF/MANIFEST.MF","META-INF/*.SF","META-INF/*.RSA","META-INF/*.DSA"));
+        });
+        var sourceJar=project.getTasks().register("minecraftLibrarySourcesJar",Jar.class,task->{
+            task.setGroup("patchgen");task.getDestinationDirectory().set(libraryDir);
+            task.getArchiveFileName().set("minecraft-mapped-sources.jar");task.from(sources);
+        });
+        project.getDependencies().add("implementation","patchgen.local:minecraft:mapped");
+        return project.getTasks().register("prepareMinecraftLibrary",task->{
+            task.setGroup("patchgen");task.dependsOn(libraryJar,sourceJar);
         });
     }
 

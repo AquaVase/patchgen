@@ -6,7 +6,7 @@ import org.gradle.api.DefaultTask;
 import org.gradle.api.file.*;
 import org.gradle.api.tasks.*;
 
-/** Overlay only; never delete clean game sources or regenerate them during a normal build. */
+/** Copy user overlays without modifying the Minecraft dependency. */
 public abstract class SyncSourcesTask extends DefaultTask {
     @InputFiles @PathSensitive(PathSensitivity.RELATIVE) public abstract ConfigurableFileCollection getSourceOverlays();
     @InputFiles @PathSensitive(PathSensitivity.RELATIVE) public abstract ConfigurableFileCollection getResourceOverlays();
@@ -21,7 +21,6 @@ public abstract class SyncSourcesTask extends DefaultTask {
     private void copy(ConfigurableFileCollection overlays,Path destination,boolean javaOnly) throws IOException {
         for(File directory:overlays) {
             ArchiveIO.require(directory.isDirectory(),"Overlay is not a directory: "+directory);
-            ArchiveIO.require(Files.isDirectory(getSourcesDirectory().get().getAsFile().toPath()),"Run setupWorkspace before overlaying sources");
             Path source=directory.toPath();
             try(var files=Files.walk(source)) {
                 for(Path file:files.filter(Files::isRegularFile).toList()) {

@@ -42,14 +42,19 @@ You can use `-Porg.gradle.java.installations.paths=...` to specify the JDK path.
 
 | Task | Behavior                                                                                                                |
 | --- |-------------------------------------------------------------------------------------------------------------------------|
-| `setupWorkspace` | ForgeGradle extracts mapped Minecraft src to `src/main/java`, downloads assets, and applies the src/resources overlay   |
+| `setupWorkspace` | Builds a separate mapped Minecraft library with attached MCP sources, downloads assets, and applies user overlays |
+| `prepareMinecraftLibrary` | Compiles mapped MCP sources and creates the local dependency JAR and sources JAR |
 | `syncSources` | Copies the configured overlay to src/resources                                                                          |
-| `compileGame` | Syncs the overlay and compiles the full src (including Minecraft)                                                       |
+| `compileGame` | Prepares the Minecraft dependency, syncs user overlays, and compiles user code |
 | `runClient` / `runServer` | Runs the compiled output via this project's JavaExec; the client uses ForgeGradle resources and natives                 |
 | `generatePatches` | Encodes baseJar and modifiedJar into a patch archive, and verifies restoration entry by entry and for the whole archive |
 | `restoreArchive` | Restores baseJar and inputArchive to `build/patchgen/restored.jar`                                                      |
 
-Run `./gradlew setupWorkspace` the first time, then edit `src/main/java` and run `./gradlew runClient`. `setupWorkspace` overwrites the generated sources; daily compilation, launching, and patch generation do not depend on the source extraction task, avoiding overwriting development changes. After `clean`, there is no need to re-extract sources that are still under `src`.
+Run `./gradlew setupWorkspace` the first time, then refresh the Gradle project in your IDE. Minecraft is a separate compile/runtime dependency with a matching sources JAR for navigation and completion. Write your own code in `src/main/java` and run `./gradlew runClient`. User output precedes the Minecraft library on the runtime classpath, allowing classes with matching package and class names to override library classes.
+
+The library is compiled from ForgeGradle's mapped MCP source archive and stored under `.patchgen/library/`, which must not be committed. Setup and normal compilation do not extract Minecraft sources into `src/main/java`; library generation is incremental and is also wired into compilation. Existing Minecraft sources from an older setup are not deleted automatically: move or remove unmodified generated files yourself, preserving your edits. The low-level ForgeGradle `extractMapped` task still explicitly extracts sources if invoked.
+
+This change only separates the development library from user sources. The project's `jar` still contains user output only; automatic source-patch export, merging a complete target archive, and reobfuscation for `generatePatches` are not implemented. For a complete binary-patch target, configure `modifiedJar` explicitly.
 
 If you need to preserve overlays, you can configure `sourceOverlays.from('sources')` and `resourceOverlays.from('resources')`; in that case you should edit the overlay files, and subsequent syncs will overwrite the corresponding generated files. Deleting an overlay file will not automatically delete the old file in the generated directory.
 
