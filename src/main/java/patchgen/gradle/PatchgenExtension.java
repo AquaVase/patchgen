@@ -11,6 +11,7 @@ public abstract class PatchgenExtension {
     public abstract Property<String> getMappingVersion();
     public abstract Property<Integer> getJavaVersion();
     public abstract DirectoryProperty getSourcesDirectory();
+    public abstract DirectoryProperty getSourcePatchesDirectory();
     public abstract DirectoryProperty getRunDirectory();
     public abstract ConfigurableFileCollection getSourceOverlays();
     public abstract ConfigurableFileCollection getResourceOverlays();

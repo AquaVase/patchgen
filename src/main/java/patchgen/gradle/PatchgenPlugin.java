@@ -29,6 +29,7 @@ public class PatchgenPlugin implements Plugin<Project> {
         ext.getPipeline().convention("joined");ext.getMappingChannel().convention("official");
         ext.getMappingVersion().convention(ext.getMinecraftVersion());ext.getJavaVersion().convention(21);
         ext.getSourcesDirectory().convention(project.getLayout().getProjectDirectory().dir("src/main/java"));
+        ext.getSourcePatchesDirectory().convention(project.getLayout().getProjectDirectory().dir("patches"));
         ext.getRunDirectory().convention(project.getLayout().getProjectDirectory().dir("run"));
         ext.getArchivePrefix().convention("");ext.getUnprefixedPackages().convention(List.of());ext.getAdditionalIncludes().convention(List.of());
         ext.getClientMainClass().convention("net.minecraft.client.main.Main");ext.getServerMainClass().convention("net.minecraft.server.Main");
@@ -61,6 +62,19 @@ public class PatchgenPlugin implements Plugin<Project> {
             task.getOptions().setEncoding("UTF-8");task.getOptions().setFork(true);task.getOptions().getForkOptions().setMemoryMaximumSize("6g");
         });
         var main=project.getExtensions().getByType(SourceSetContainer.class).named("main");
+        var mappedSources=project.getTasks().named("srg2mcp",ApplyMappings.class).flatMap(ApplyMappings::getOutput);
+        project.getTasks().register("genSourcePatches",GenerateSourcePatchesTask.class,task->{
+            task.setGroup("patchgen");task.setDescription("Generate unified source patches from user sources against mapped MCP sources.");
+            task.getBaseSources().set(mappedSources);
+            task.getSourcesDirectory().set(ext.getSourcesDirectory());
+            task.getPatchesDirectory().set(ext.getSourcePatchesDirectory());
+        });
+        project.getTasks().register("restoreSourceFromPatches",RestoreSourceFromPatchesTask.class,task->{
+            task.setGroup("patchgen");task.setDescription("Restore patched and added Java sources from mapped MCP sources and source patches.");
+            task.getBaseSources().set(mappedSources);
+            task.getPatchesDirectory().set(ext.getSourcePatchesDirectory());
+            task.getSourcesDirectory().set(ext.getSourcesDirectory());
+        });
         var sync=project.getTasks().register("syncSources",SyncSourcesTask.class,task->{
             task.setGroup("patchgen");task.setDescription("Overlay configured sources and resources into this project.");
             task.getSourceOverlays().from(ext.getSourceOverlays());task.getResourceOverlays().from(ext.getResourceOverlays());

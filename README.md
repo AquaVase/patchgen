@@ -44,6 +44,8 @@ You can use `-Porg.gradle.java.installations.paths=...` to specify the JDK path.
 | --- |-------------------------------------------------------------------------------------------------------------------------|
 | `setupWorkspace` | Builds a separate mapped Minecraft library with attached MCP sources, downloads assets, and applies user overlays |
 | `prepareMinecraftLibrary` | Compiles mapped MCP sources and creates the local dependency JAR and sources JAR |
+| `genSourcePatches` | Generates `patches/<package>/<Class>.java.patch` from modified or added Java sources against mapped MCP sources |
+| `restoreSourceFromPatches` | Restores only patched and added Java files into `sourcesDirectory` using mapped MCP sources |
 | `syncSources` | Copies the configured overlay to src/resources                                                                          |
 | `compileGame` | Prepares the Minecraft dependency, syncs user overlays, and compiles user code |
 | `runClient` / `runServer` | Runs the compiled output via this project's JavaExec; the client uses ForgeGradle resources and natives                 |
@@ -54,9 +56,32 @@ Run `./gradlew setupWorkspace` the first time, then refresh the Gradle project i
 
 The library is compiled from ForgeGradle's mapped MCP source archive and stored under `.patchgen/library/`, which must not be committed. Setup and normal compilation do not extract Minecraft sources into `src/main/java`; library generation is incremental and is also wired into compilation. Existing Minecraft sources from an older setup are not deleted automatically: move or remove unmodified generated files yourself, preserving your edits. The low-level ForgeGradle `extractMapped` task still explicitly extracts sources if invoked.
 
-This change only separates the development library from user sources. The project's `jar` still contains user output only; automatic source-patch export, merging a complete target archive, and reobfuscation for `generatePatches` are not implemented. For a complete binary-patch target, configure `modifiedJar` explicitly.
+The project's `jar` still contains user output only; merging a complete target archive and reobfuscation for `generatePatches` are not implemented. For a complete binary-patch target, configure `modifiedJar` explicitly.
 
 If you need to preserve overlays, you can configure `sourceOverlays.from('sources')` and `resourceOverlays.from('resources')`; in that case you should edit the overlay files, and subsequent syncs will overwrite the corresponding generated files. Deleting an overlay file will not automatically delete the old file in the generated directory.
+
+## Source patches
+
+Copy only Minecraft classes you want to edit from the attached MCP sources into `src/main/java`, and edit them as normal Java files. Added Java classes may also live there. Then run:
+
+```powershell
+./gradlew genSourcePatches
+# On another checkout, with the same Minecraft, MCP and mapping configuration:
+./gradlew restoreSourceFromPatches
+```
+
+Both tasks obtain their baseline from ForgeGradle's `srg2mcp` output automatically, without compiling Minecraft or extracting its complete source tree. Source patches use diff4j 1.3 to generate unified diffs with three context lines, UTF-8 and LF line endings. Restoration validates paths, hunk ranges and exact context before writing any files. File-final newline differences are preserved; CRLF/CR line endings are normalized to LF.
+
+The source directory is a sparse set of overrides: Minecraft files absent from it are not treated as deletions, and files identical to the baseline produce no patches. Added classes use `/dev/null` as their baseline. Generation replaces matching `*.java.patch` files and removes stale ones in the configured patch directory; other files such as a README are preserved. Resources are outside these tasks' scope.
+
+Restoration explicitly overwrites files named by the patches, including local edits to those files, and preserves unrelated files. It does not delete overrides whose patches have been removed. Run it explicitly when initializing or resetting an editing workspace; it is not automatically run by setup or compilation. Keep patches in version control; generated Minecraft sources and `.patchgen/` should remain local. You can configure the directories:
+
+```groovy
+patchgen {
+    sourcesDirectory = layout.projectDirectory.dir('src/main/java')
+    sourcePatchesDirectory = layout.projectDirectory.dir('patches')
+}
+```
 
 ## Configuration
 
@@ -67,6 +92,7 @@ If you need to preserve overlays, you can configure `sourceOverlays.from('source
 | `mappingChannel`, `mappingVersion` | `official`, minecraftVersion |
 | `javaVersion` | 21; toolchain for game compilation and runtime |
 | `sourcesDirectory`, `runDirectory` | `src/main/java`, `run` |
+| `sourcePatchesDirectory` | `patches`; input/output directory for the source-patch tasks |
 | `clientMainClass`, `serverMainClass` | `net.minecraft.client.main.Main`, `net.minecraft.server.Main` |
 | `baseJar` | Patch baseline JAR; defaults to the original Minecraft client JAR resolved and cached by ForgeGradle for `minecraftVersion` |
 | `modifiedJar` | The output of this project's `jar`; supports task providers and automatically establishes task dependencies |

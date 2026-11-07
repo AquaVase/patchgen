@@ -120,6 +120,38 @@ public class PatchgenPluginTest {
         ArchiveIO.equal(ArchiveIO.read(target),ArchivePatches.restore(base,project.resolve("build/patchgen/patches.jar"),""));
     }
 
+    @Test public void sourcePatchTasksRoundTripWithoutCompilingOrExtractingMinecraft() throws Exception {
+        ArchiveIO.write(project.resolve("mapped-sources.jar"),Map.of(
+            "net/minecraft/Example.java","class Example { int value = 1; }\n".getBytes(),
+            "net/minecraft/Other.java","class Other {}\n".getBytes()));
+        Files.writeString(project.resolve("build.gradle"),"""
+
+            patchgen {
+                sourcesDirectory = layout.projectDirectory.dir('custom-src')
+                sourcePatchesDirectory = layout.projectDirectory.dir('custom-patches')
+            }
+            tasks.named('srg2mcp') {
+                enabled = false
+                input = file('mapped-sources.jar')
+                mappings = file('mapped-sources.jar')
+                output = file('mapped-sources.jar')
+            }
+            """,StandardOpenOption.APPEND);
+        Path source=project.resolve("custom-src/net/minecraft/Example.java");Files.createDirectories(source.getParent());
+        String target="class Example { int value = 2; }\n";Files.writeString(source,target);
+        var generated=runner("genSourcePatches").build();
+        assertNull(generated.task(":compileMinecraftLibrary"));assertNull(generated.task(":extractMapped"));
+        assertTrue(Files.exists(project.resolve("custom-patches/net/minecraft/Example.java.patch")));
+        Files.delete(source);
+        var restored=runner("restoreSourceFromPatches").build();
+        assertNull(restored.task(":compileJava"));assertNull(restored.task(":extractMapped"));
+        assertEquals(target,Files.readString(source));
+        assertFalse(Files.exists(source.resolveSibling("Other.java")));
+        Files.writeString(source,"unsaved-to-patches edit");runner("restoreSourceFromPatches").build();
+        assertEquals(target,Files.readString(source));
+        assertEquals(TaskOutcome.UP_TO_DATE,runner("genSourcePatches").build().task(":genSourcePatches").getOutcome());
+    }
+
     @Test public void baseJarDefaultsToMinecraftClientForBothBinaryTasks() throws Exception {
         Files.writeString(project.resolve("build.gradle"),"""
 

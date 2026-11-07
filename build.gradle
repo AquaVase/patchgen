@@ -14,6 +14,7 @@ repositories {
 dependencies {
     implementation 'net.minecraftforge.gradle:ForgeGradle:6.0.54'
     implementation 'com.nothome:javaxdelta:2.0.1'
+    implementation 'com.cloudbees:diff4j:1.3'
     testImplementation gradleTestKit()
     testImplementation 'junit:junit:4.13.2'
 }
