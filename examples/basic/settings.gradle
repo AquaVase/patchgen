@@ -1,0 +1,11 @@
+pluginManagement {
+    includeBuild('../..')
+    repositories {
+        maven { url = 'https://maven.creeperhost.net' }
+        maven { url = 'https://maven.minecraftforge.net' }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+plugins { id 'patchgen.settings' }
+rootProject.name = 'patchgen-example'

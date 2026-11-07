@@ -1,0 +1,51 @@
+plugins {
+    id 'java-gradle-plugin'
+    id 'maven-publish'
+}
+group = 'patchgen'
+version = '0.3.0'
+java { toolchain.languageVersion = JavaLanguageVersion.of(21) }
+repositories {
+    maven { url = 'https://maven.creeperhost.net' }
+    maven { url = 'https://maven.minecraftforge.net' }
+    mavenCentral()
+    gradlePluginPortal()
+}
+dependencies {
+    implementation 'net.minecraftforge.gradle:ForgeGradle:6.0.54'
+    implementation 'com.nothome:javaxdelta:2.0.1'
+    testImplementation gradleTestKit()
+    testImplementation 'junit:junit:4.13.2'
+}
+gradlePlugin {
+    plugins {
+        patchgen {
+            id = 'patchgen'
+            implementationClass = 'patchgen.gradle.PatchgenPlugin'
+            displayName = 'patchgen'
+            description = 'ForgeGradle based Minecraft source development and GDIFF archive patches.'
+        }
+        patchgenSettings {
+            id = 'patchgen.settings'
+            implementationClass = 'patchgen.gradle.PatchgenSettingsPlugin'
+            displayName = 'patchgen settings'
+            description = 'Registers the ForgeGradle MCP parent in the same build.'
+        }
+    }
+}
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
+tasks.withType(Test).configureEach {
+    maxParallelForks = 1
+    environment 'JAVA_TOOL_OPTIONS', '-Djdk.net.unixdomain.tmpdir=C:/nonexistent-codex-uds'
+    systemProperty 'patchgen.testJavaHomes', providers.gradleProperty('org.gradle.java.installations.paths').getOrElse('')
+}
+tasks.register('projectZip', Zip) {
+    group = 'distribution'
+    archiveFileName = "patchgen-${project.version}-project.zip"
+    destinationDirectory = layout.buildDirectory.dir('distributions')
+    from(projectDir) {
+        include 'src/**', 'gradle/**', 'gradlew', 'gradlew.bat', 'build.gradle', 'settings.gradle'
+        include 'gradle.properties', 'README.md', 'NOTICE.md', '.gitignore', 'examples/**'
+        into 'patchgen'
+    }
+}

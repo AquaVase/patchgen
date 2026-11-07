@@ -1,0 +1,10 @@
+/.gradle/
+/build/
+/.idea/
+*.iml
+**/.patchgen/
+**/.gradle/
+examples/**/build/
+examples/**/src/
+examples/**/run/
+examples/**/inputs/
