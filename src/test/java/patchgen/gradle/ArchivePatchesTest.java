@@ -67,4 +67,53 @@ public class ArchivePatchesTest {
         assertTrue(ArchivePatches.matches("custom/a+b$.class",List.of("custom/a+b$.class")));
         assertFalse(ArchivePatches.matches("custom/ab.class",List.of("custom/a+b$.class")));
     }
+
+    @Test public void customPatchRootRoutesNamespacesToIndependentBasesAndVerifiesMd5() throws Exception {
+        Path output=temp.newFile("dual.jar").toPath();
+        var base=Map.of("a.class","notch-base".getBytes());
+        var srgBase=Map.of("net/minecraft/Game.class","srg-base".getBytes());
+        var target=Map.of("notch/a.class","notch-modified".getBytes(),
+            "srg/net/minecraft/Game.class","srg-modified".getBytes(),"assets/new.txt","new".getBytes());
+        var layout=PatchLayout.of("custom/binary","notch","srg");
+        ArchivePatches.generate(base,srgBase,target,output,layout);
+        var encoded=ArchiveIO.read(output);
+        assertTrue(encoded.containsKey("custom/binary/notch/a.class.xdelta"));
+        assertTrue(encoded.containsKey("custom/binary/srg/net/minecraft/Game.class.xdelta"));
+        assertTrue(encoded.containsKey("custom/binary/srg/net/minecraft/Game.class.md5"));
+        assertFalse(encoded.containsKey("patch/notch/a.class.xdelta"));
+        ArchiveIO.equal(target,ArchivePatches.restore(base,srgBase,encoded,layout));
+        assertThrows(java.io.IOException.class,()->ArchivePatches.restore(base,Map.of(),encoded,layout));
+        encoded.put("custom/binary/srg/net/minecraft/Game.class.md5","invalid".getBytes());
+        assertThrows(java.io.IOException.class,()->ArchivePatches.restore(base,srgBase,encoded,layout));
+    }
+
+    @Test public void dualOverlayPrefixesClassesAndPreservesTemplateNamespacesAndSharedResources() throws Exception {
+        var layout=PatchLayout.of("delta/","notch/","srg/");
+        var notch=Map.of("a.class","new-notch".getBytes(),"assets/test.txt","resource".getBytes(),"shared/Util.class",new byte[]{8});
+        var srg=Map.of("Game.class","new-srg".getBytes(),"assets/test.txt","srg-resource".getBytes(),"shared/Util.class",new byte[]{9});
+        var target=ArchivePatches.target(Map.of(),Map.of(),notch,srg,null,layout,List.of("shared/"),List.of());
+        assertTrue(target.containsKey("notch/a.class"));assertTrue(target.containsKey("srg/Game.class"));
+        assertFalse(target.containsKey("srg/assets/test.txt"));assertArrayEquals("resource".getBytes(),target.get("assets/test.txt"));
+        assertArrayEquals(new byte[]{8},target.get("shared/Util.class"));
+        var template=Map.of("notch/a.class","old-notch".getBytes(),"srg/Game.class","old-srg".getBytes(),"third/Keep.class",new byte[]{1});
+        var overlaid=ArchivePatches.target(Map.of(),Map.of(),notch,srg,template,layout,List.of("shared/"),List.of("assets/**"));
+        assertArrayEquals("new-notch".getBytes(),overlaid.get("notch/a.class"));
+        assertArrayEquals("new-srg".getBytes(),overlaid.get("srg/Game.class"));assertTrue(overlaid.containsKey("third/Keep.class"));
+        assertFalse(overlaid.containsKey("shared/Util.class"));
+    }
+
+    @Test public void patchRootCanBeArchiveRootAndInvalidLayoutsFailBeforeWriting() throws Exception {
+        Path output=temp.newFile("root.jar").toPath();
+        var base=Map.of("file",new byte[]{1});var target=Map.of("file",new byte[]{2});
+        var layout=PatchLayout.of("","","");ArchivePatches.generate(base,Map.of(),target,output,layout);
+        assertTrue(ArchiveIO.read(output).containsKey("file.xdelta"));
+        ArchiveIO.equal(target,ArchivePatches.restore(base,Map.of(),ArchiveIO.read(output),layout));
+        for(String bad:List.of("../bad","/absolute","C:/bad","a//b","a/./b","a\\b"))
+            assertThrows(java.io.IOException.class,()->PatchLayout.of(bad,"",""));
+        for(String[] prefixes:List.of(new String[]{"","srg"},new String[]{"same","same"},new String[]{"a","a/b"}))
+            assertThrows(java.io.IOException.class,()->PatchLayout.of("patch",prefixes[0],prefixes[1]));
+        byte[] before=Files.readAllBytes(output);
+        assertThrows(java.io.IOException.class,()->ArchivePatches.generate(base,Map.of(),Map.of("file.md5",new byte[0]),output,layout));
+        assertArrayEquals(before,Files.readAllBytes(output));
+    }
 }

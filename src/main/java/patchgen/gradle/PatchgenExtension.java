@@ -19,7 +19,12 @@ public abstract class PatchgenExtension {
     public abstract RegularFileProperty getModifiedJar();
     public abstract RegularFileProperty getInputArchive();
     public abstract RegularFileProperty getOutputArchive();
-    public abstract Property<String> getArchivePrefix();
+    public abstract Property<String> getPatchRoot();
+    public abstract Property<String> getNotchPrefix();
+    public abstract Property<String> getSrgPrefix();
+    public abstract RegularFileProperty getSrgBaseJar();
+    public abstract RegularFileProperty getNotchModifiedJar();
+    public abstract RegularFileProperty getSrgModifiedJar();
     public abstract ListProperty<String> getUnprefixedPackages();
     public abstract ListProperty<String> getAdditionalIncludes();
     public abstract Property<String> getClientMainClass();

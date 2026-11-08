@@ -1,9 +1,13 @@
 plugins { id 'patchgen' }
 patchgen {
     minecraftVersion = '1.21.1'
-    mcpConfig = '1.21.1-20240808.144430'
+    mcpConfig = '1.21.1-20240808.132146'
     javaVersion = 21
     // Defaults to the MCP Minecraft client JAR.
     // baseJar = file('inputs/base.jar')
     outputArchive = layout.buildDirectory.file('patches.jar')
+    // Enable both original/Notch and SRG binary patches in the same archive:
+    // patchRoot = 'patch/'
+    // notchPrefix = 'notch/'
+    // srgPrefix = 'srg/'
 }

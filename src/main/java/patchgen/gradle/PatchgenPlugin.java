@@ -6,6 +6,10 @@ import net.minecraftforge.gradle.mcp.MCPPlugin;
 import net.minecraftforge.gradle.mcp.MCPExtension;
 import net.minecraftforge.gradle.patcher.PatcherPlugin;
 import net.minecraftforge.gradle.patcher.PatcherExtension;
+import net.minecraftforge.gradle.patcher.tasks.ReobfuscateJar;
+import net.minecraftforge.gradle.mcp.tasks.GenerateSRG;
+import org.gradle.api.file.RegularFile;
+import org.gradle.api.provider.Provider;
 import net.minecraftforge.gradle.common.tasks.DownloadAssets;
 import net.minecraftforge.gradle.common.tasks.ApplyMappings;
 import net.minecraftforge.gradle.common.tasks.ExtractNatives;
@@ -31,7 +35,8 @@ public class PatchgenPlugin implements Plugin<Project> {
         ext.getSourcesDirectory().convention(project.getLayout().getProjectDirectory().dir("src/main/java"));
         ext.getSourcePatchesDirectory().convention(project.getLayout().getProjectDirectory().dir("patches"));
         ext.getRunDirectory().convention(project.getLayout().getProjectDirectory().dir("run"));
-        ext.getArchivePrefix().convention("");ext.getUnprefixedPackages().convention(List.of());ext.getAdditionalIncludes().convention(List.of());
+        ext.getPatchRoot().convention("patch/");ext.getNotchPrefix().convention("");ext.getSrgPrefix().convention("");
+        ext.getUnprefixedPackages().convention(List.of());ext.getAdditionalIncludes().convention(List.of());
         ext.getClientMainClass().convention("net.minecraft.client.main.Main");ext.getServerMainClass().convention("net.minecraft.server.Main");
         ext.getOutputArchive().convention(project.getLayout().getBuildDirectory().file("patchgen/patches.jar"));
 
@@ -51,6 +56,12 @@ public class PatchgenPlugin implements Plugin<Project> {
                 throw new GradleException("Cannot resolve Minecraft client JAR for version "+version);
             return client;
         })));
+        ext.getSrgBaseJar().convention(ext.getSrgPrefix().flatMap(prefix->prefix.isEmpty()?missingFile(project):
+            ext.getMinecraftVersion().flatMap(version->!Utils.isObfuscated(version)?ext.getBaseJar():project.getLayout().file(ext.getMcpConfig().map(config->{
+                File client=MavenArtifactDownloader.generate(project,"net.minecraft:client:"+config+":srg",true);
+                if(client==null||!client.isFile())throw new GradleException("Cannot resolve SRG Minecraft client JAR for "+config);
+                return client;
+            })))));
         project.getPluginManager().apply("idea");
         var patcher=project.getExtensions().getByType(PatcherExtension.class);
         patcher.getParent().set(parent);patcher.getMcVersion().set(ext.getMinecraftVersion());
@@ -125,10 +136,31 @@ public class PatchgenPlugin implements Plugin<Project> {
         });
         var jar=project.getTasks().named("jar",Jar.class);
         ext.getModifiedJar().convention(jar.flatMap(Jar::getArchiveFile));
-        binary(project,ext,"generatePatches","generate").configure(task->task.getModifiedJar().set(ext.getModifiedJar()));
+        var notch=remapTarget(project,ext,"remapNotchTarget","createMcp2Obf",main,minecraftLibrary);
+        var srg=remapTarget(project,ext,"remapSrgTarget","createMcp2Srg",main,minecraftLibrary);
+        ext.getNotchModifiedJar().convention(ext.getSrgPrefix().flatMap(prefix->prefix.isEmpty()?ext.getModifiedJar():
+            ext.getMinecraftVersion().flatMap(version->Utils.isObfuscated(version)?notch:ext.getModifiedJar())));
+        ext.getSrgModifiedJar().convention(ext.getSrgPrefix().flatMap(prefix->prefix.isEmpty()?missingFile(project):
+            ext.getMinecraftVersion().flatMap(version->Utils.isObfuscated(version)?srg:ext.getModifiedJar())));
+        binary(project,ext,"generatePatches","generate").configure(task->{
+            task.getModifiedJar().set(ext.getNotchModifiedJar());task.getSrgModifiedJar().set(ext.getSrgModifiedJar());
+        });
         binary(project,ext,"restoreArchive","restore").configure(task->{
             task.getOutputArchive().set(project.getLayout().getBuildDirectory().file("patchgen/restored.jar"));
         });
+    }
+
+    private static Provider<RegularFile> missingFile(Project project) { return project.getProviders().provider(()->null); }
+
+    private Provider<RegularFile> remapTarget(Project project,PatchgenExtension ext,String name,String mapping,
+            org.gradle.api.NamedDomainObjectProvider<SourceSet> main,TaskProvider<Task> library) {
+        return project.getTasks().register(name,ReobfuscateJar.class,task->{
+            task.setGroup("patchgen");task.setDescription("Remap the modified development JAR using "+mapping+".");
+            task.getInput().set(ext.getModifiedJar());
+            task.getSrg().set(project.getTasks().named(mapping,GenerateSRG.class).flatMap(GenerateSRG::getOutput));
+            task.getLibraries().from(main.map(SourceSet::getCompileClasspath));task.dependsOn(library);
+            task.keepData();task.keepPackages();task.useArgsFile();
+        }).flatMap(ReobfuscateJar::getOutput);
     }
 
     private TaskProvider<Task> minecraftLibrary(Project project,PatchgenExtension ext,JavaToolchainService toolchains) {
@@ -174,7 +206,9 @@ public class PatchgenPlugin implements Plugin<Project> {
         return p.getTasks().register(name,BinaryPatchTask.class,task->{
             task.setGroup("patchgen");task.getOperation().set(operation);task.getBaseJar().set(ext.getBaseJar());
             task.getInputArchive().set(ext.getInputArchive());task.getOutputArchive().set(ext.getOutputArchive());
-            task.getArchivePrefix().set(ext.getArchivePrefix());task.getUnprefixedPackages().set(ext.getUnprefixedPackages());
+            task.getPatchRoot().set(ext.getPatchRoot());task.getNotchPrefix().set(ext.getNotchPrefix());
+            task.getSrgPrefix().set(ext.getSrgPrefix());task.getSrgBaseJar().set(ext.getSrgBaseJar());
+            task.getUnprefixedPackages().set(ext.getUnprefixedPackages());
             task.getAdditionalIncludes().set(ext.getAdditionalIncludes());
         });
     }

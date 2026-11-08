@@ -49,7 +49,7 @@ public class PatchgenPluginTest {
     }
 
     @Test public void secondMinecraftVersionIsConfigurationNotPluginCode() throws Exception {
-        Path build=project.resolve("build.gradle");Files.writeString(build,Files.readString(build).replace("26.2-20260616.103818","1.21.1-20240808.144430").replace("26.2","1.21.1").replace("javaVersion = 25","javaVersion = 21"));
+        Path build=project.resolve("build.gradle");Files.writeString(build,Files.readString(build).replace("26.2-20260616.103818","1.21.1-20240808.132146").replace("26.2","1.21.1").replace("javaVersion = 25","javaVersion = 21"));
         assertTrue(runner("inspectPatchgen").build().getOutput().contains("FORGEGRADLE_REQUIRED_AND_SAME_BUILD"));
     }
 
@@ -225,6 +225,77 @@ public class PatchgenPluginTest {
         assertEquals(TaskOutcome.UP_TO_DATE,runner("genSourcePatches").build().task(":genSourcePatches").getOutcome());
     }
 
+    @Test public void binaryTasksGenerateAndRestoreBothNamespacesWithCustomRoot() throws Exception {
+        ArchiveIO.write(project.resolve("notch-base.jar"),Map.of("a.class","notch base".getBytes()));
+        ArchiveIO.write(project.resolve("srg-base.jar"),Map.of("Game.class","srg base".getBytes()));
+        ArchiveIO.write(project.resolve("notch-target.jar"),Map.of("a.class","notch changed".getBytes(),"assets/test.txt","shared".getBytes()));
+        ArchiveIO.write(project.resolve("srg-target.jar"),Map.of("Game.class","srg changed".getBytes()));
+        Files.writeString(project.resolve("build.gradle"),"""
+
+            patchgen {
+                baseJar = file('notch-base.jar')
+                srgBaseJar = file('srg-base.jar')
+                notchModifiedJar = file('notch-target.jar')
+                srgModifiedJar = file('srg-target.jar')
+                patchRoot = 'custom/deltas'
+                notchPrefix = 'notch'
+                srgPrefix = 'srg'
+            }
+            """,StandardOpenOption.APPEND);
+        var result=runner("generatePatches").build();
+        assertNull(result.task(":compileJava"));assertNull(result.task(":remapSrgTarget"));
+        Path patch=project.resolve("build/patchgen/patches.jar");var encoded=ArchiveIO.read(patch);
+        assertTrue(encoded.containsKey("custom/deltas/notch/a.class.xdelta"));
+        assertTrue(encoded.containsKey("custom/deltas/srg/Game.class.xdelta"));
+        Files.writeString(project.resolve("build.gradle"),"\npatchgen.inputArchive = file('build/patchgen/patches.jar')\n",StandardOpenOption.APPEND);
+        runner("restoreArchive").build();
+        var restored=ArchiveIO.read(project.resolve("build/patchgen/restored.jar"));
+        assertArrayEquals("notch changed".getBytes(),restored.get("notch/a.class"));
+        assertArrayEquals("srg changed".getBytes(),restored.get("srg/Game.class"));
+        assertArrayEquals("shared".getBytes(),restored.get("assets/test.txt"));
+    }
+
+    @Test public void dualModeRemapsDevelopmentClassesIntoNotchAndSrgNames() throws Exception {
+        Path build=project.resolve("build.gradle");
+        Files.writeString(build,Files.readString(build).replace("26.2-20260616.103818","1.21.1-20240808.132146").replace("26.2","1.21.1").replace("javaVersion = 25","javaVersion = 21"));
+        ArchiveIO.write(project.resolve("notch-base.jar"),Map.of("a.class",new byte[]{1}));
+        ArchiveIO.write(project.resolve("srg-base.jar"),Map.of("srg/Game.class",new byte[]{2}));
+        ArchiveIO.write(project.resolve("mapped-sources.jar"),Map.of("dev/Game.java",
+            "package dev; public class Game { public void tick() {} }".getBytes()));
+        Path source=project.resolve("src/main/java/dev/Game.java");Files.createDirectories(source.getParent());
+        Files.writeString(source,"package dev; public class Game { public void tick() { System.out.println(\"modified\"); } }");
+        Files.writeString(project.resolve("notch.tsrg"),"dev/Game a\n\ttick ()V b\n");
+        Files.writeString(project.resolve("srg.tsrg"),"dev/Game srg/Game\n\ttick ()V func_1\n");
+        Files.writeString(build,"""
+
+            patchgen {
+                baseJar = file('notch-base.jar')
+                srgBaseJar = file('srg-base.jar')
+                notchPrefix = 'notch/'
+                srgPrefix = 'srg/'
+            }
+            tasks.named('srg2mcp') {
+                enabled = false
+                input = file('mapped-sources.jar')
+                mappings = file('mapped-sources.jar')
+                output = file('mapped-sources.jar')
+            }
+            afterEvaluate { configurations.minecraftImplementation.dependencies.clear() }
+            tasks.named('remapNotchTarget') { srg = file('notch.tsrg') }
+            tasks.named('remapSrgTarget') { srg = file('srg.tsrg') }
+            """,StandardOpenOption.APPEND);
+        var result=runner("generatePatches").build();
+        assertNotNull(result.task(":remapNotchTarget"));assertNotNull(result.task(":remapSrgTarget"));
+        var notch=ArchiveIO.read(project.resolve("build/remapNotchTarget/output.jar"));
+        var srg=ArchiveIO.read(project.resolve("build/remapSrgTarget/output.jar"));
+        assertTrue(notch.containsKey("a.class"));assertTrue(srg.containsKey("srg/Game.class"));
+        var layout=PatchLayout.of("patch/","notch/","srg/");
+        var restored=ArchivePatches.restore(ArchiveIO.read(project.resolve("notch-base.jar")),ArchiveIO.read(project.resolve("srg-base.jar")),
+            ArchiveIO.read(project.resolve("build/patchgen/patches.jar")),layout);
+        assertArrayEquals(notch.get("a.class"),restored.get("notch/a.class"));
+        assertArrayEquals(srg.get("srg/Game.class"),restored.get("srg/srg/Game.class"));
+    }
+
     @Test public void baseJarDefaultsToMinecraftClientForBothBinaryTasks() throws Exception {
         Files.writeString(project.resolve("build.gradle"),"""
 
@@ -236,11 +307,36 @@ public class PatchgenPluginTest {
                     assert client.parentFile.name == patchgen.minecraftVersion.get()
                     assert tasks.generatePatches.baseJar.get().asFile == client
                     assert tasks.restoreArchive.baseJar.get().asFile == client
+                    assert !patchgen.srgBaseJar.isPresent()
+                    assert !tasks.generatePatches.srgModifiedJar.isPresent()
                     println 'DEFAULT_CLIENT_BASE_JAR'
                 }
             }
             """,StandardOpenOption.APPEND);
         assertTrue(runner("inspectBaseJar").build().getOutput().contains("DEFAULT_CLIENT_BASE_JAR"));
+    }
+
+    @Test public void defaultSrgBaselineResolvesFromMcpAndUnobfuscatedTargetsSkipRemapping() throws Exception {
+        Files.writeString(project.resolve("build.gradle"),"""
+
+            patchgen { notchPrefix = 'notch/'; srgPrefix = 'srg/' }
+            tasks.register('inspectSrgBase') {
+                doLast {
+                    def srg = patchgen.srgBaseJar.get().asFile
+                    assert srg.isFile()
+                    // Unobfuscated releases share the original baseline without a separate SRG client artifact.
+                    assert srg == patchgen.baseJar.get().asFile
+                    assert tasks.generatePatches.srgBaseJar.get().asFile == srg
+                    assert tasks.restoreArchive.srgBaseJar.get().asFile == srg
+                    assert patchgen.notchModifiedJar.get() == patchgen.modifiedJar.get()
+                    assert patchgen.srgModifiedJar.get() == patchgen.modifiedJar.get()
+                    println 'DEFAULT_SRG_CLIENT_BASE_JAR'
+                }
+            }
+            """,StandardOpenOption.APPEND);
+        var result=runner("inspectSrgBase").build();
+        assertTrue(result.getOutput().contains("DEFAULT_SRG_CLIENT_BASE_JAR"));
+        assertNull(result.task(":remapNotchTarget"));assertNull(result.task(":remapSrgTarget"));
     }
 
     @Test public void missingSettingsPluginFailsClearly() throws Exception {

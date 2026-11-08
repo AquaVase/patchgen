@@ -26,7 +26,7 @@ In `build.gradle`:
 plugins { id 'patchgen' }
 patchgen {
     minecraftVersion = '1.21.1'
-    mcpConfig = '1.21.1-20240808.144430'
+    mcpConfig = '1.21.1-20240808.132146'
     javaVersion = 21
     // baseJar defaults to the MCP Minecraft client JAR; override it if needed:
     // baseJar = file('inputs/base.jar')
@@ -57,7 +57,7 @@ Run `./gradlew setupWorkspace` the first time, then refresh the Gradle project i
 
 The library is compiled from ForgeGradle's mapped MCP source archive and stored under `.patchgen/library/`, which must not be committed. Setup and normal compilation do not extract Minecraft sources into `src/main/java`; library generation is incremental and is also wired into compilation. Existing Minecraft sources from an older setup are not deleted automatically: move or remove unmodified generated files yourself, preserving your edits. The low-level ForgeGradle `extractMapped` task still explicitly extracts sources if invoked.
 
-The project's `jar` still contains user output only; merging a complete target archive and reobfuscation for `generatePatches` are not implemented. For a complete binary-patch target, configure `modifiedJar` explicitly.
+The project's `jar` still contains user output only; merging a complete Minecraft target archive is not automatic. For a complete binary-patch target, configure `modifiedJar` explicitly. Dual Notch/SRG mode remaps that development-named JAR into both namespaces before encoding.
 
 If you need to preserve overlays, you can configure `sourceOverlays.from('sources')` and `resourceOverlays.from('resources')`; in that case you should edit the overlay files, and subsequent syncs will overwrite the corresponding generated files. Deleting an overlay file will not automatically delete the old file in the generated directory.
 
@@ -117,14 +117,44 @@ patchgen {
 | `sourcePatchesDirectory` | `patches`; input/output directory for the source-patch tasks |
 | `clientMainClass`, `serverMainClass` | `net.minecraft.client.main.Main`, `net.minecraft.server.Main` |
 | `baseJar` | Patch baseline JAR; defaults to the original Minecraft client JAR resolved and cached by ForgeGradle for `minecraftVersion` |
-| `modifiedJar` | The output of this project's `jar`; supports task providers and automatically establishes task dependencies |
+| `modifiedJar` | The output of this project's `jar`; supports task providers. In dual mode this is the development-named input to both remapping tasks |
+| `notchModifiedJar` | Notch-named target override; defaults to `modifiedJar` in single mode, or its remapped Notch output in dual mode |
+| `srgModifiedJar` | SRG-named target override; defaults to the SRG-remapped `modifiedJar` when dual mode is enabled |
+| `srgBaseJar` | Defaults to ForgeGradle's `net.minecraft:client:<mcpConfig>:srg` when dual mode is enabled |
 | `outputArchive` | `build/patchgen/patches.jar` |
 | `inputArchive` | Optional; an existing patch archive. When generating, its restore entries are preserved and the selected targets are overwritten |
-| `archivePrefix` | Empty; for example, if an existing patch stores target classes as `notch/...`, configure `notch/` |
+| `patchRoot` | `patch/`; archive-internal directory containing `.xdelta` and `.md5` entries. Empty places them at the archive root |
+| `notchPrefix` | Empty; target class-path prefix for original/Notch bytecode, e.g. `notch/`. Renamed from `archivePrefix` |
+| `srgPrefix` | Empty disables SRG generation; e.g. `srg/` enables dual Notch/SRG generation and restoration |
 | `unprefixedPackages` | Empty list; class path prefixes that are not prefixed when using an existing archive |
 | `additionalIncludes` | Empty list; globs allowing new entries when using an existing archive, such as `assets/**` |
 
-When `inputArchive` is not configured, all entries of modifiedJar constitute the complete target. When `inputArchive` is configured, it is restored first, then entries with the same name are overwritten, along with new entries allowed by additionalIncludes; classes may have an archivePrefix, while resources do not. This can be used to preserve multiple namespaces of one archive. `patch.cfg`, `patch2.cfg`, and `patch3.cfg` support mapping from targets to baseline entries.
+When `inputArchive` is not configured, incoming target JAR entries constitute the complete target. Classes receive the configured namespace prefix even without an input archive. When `inputArchive` is configured, it is restored using the selected bases and layout first, then existing entries are overwritten along with new entries allowed by `additionalIncludes` (matched against incoming paths before prefixing). Other namespaces are preserved. `patch.cfg`, `patch2.cfg`, and `patch3.cfg` support mapping from target paths to entries in the corresponding namespace's baseline.
+
+## Dual Notch/SRG binary patches
+
+```groovy
+patchgen {
+    patchRoot = 'patch/' // Or 'custom/deltas/'; this is inside the output JAR.
+    notchPrefix = 'notch/'
+    srgPrefix = 'srg/'
+}
+```
+
+Run `./gradlew generatePatches` to create both sets of patches in one archive. A non-empty `srgPrefix` enables dual mode; both namespace prefixes must then be non-empty and must not overlap. Trailing slashes are added automatically. The old `archivePrefix` configuration must be renamed to `notchPrefix`.
+
+For obfuscated Minecraft versions, `remapNotchTarget` and `remapSrgTarget` use ForgeGradle's `createMcp2Obf` and `createMcp2Srg` mappings to transform `modifiedJar`, including bytecode references. For Minecraft versions that ForgeGradle identifies as unobfuscated, both targets use the development output directly and `srgBaseJar` defaults to `baseJar`, since a separate SRG client artifact is not available. The SRG baseline is resolved lazily only when SRG mode is enabled. Explicit `notchModifiedJar`, `srgModifiedJar`, and `srgBaseJar` values override these defaults, so already-remapped external targets do not run the corresponding remapping tasks. Single-namespace mode retains the existing behavior: `modifiedJar` is assumed to already use its baseline's naming; it is not automatically remapped.
+
+For example, the output can contain:
+
+```text
+patch/notch/a.class.xdelta
+patch/notch/a.class.md5
+patch/srg/net/minecraft/Example.class.xdelta
+patch/srg/net/minecraft/Example.class.md5
+```
+
+Notch entries are encoded against `baseJar`; SRG entries are encoded against `srgBaseJar`. Resources and classes matching `unprefixedPackages` are included once, from the Notch target, without a namespace prefix. These prefixes only organize archive paths; bytecode remapping happens separately. Restore with the same `patchRoot`, `notchPrefix`, `srgPrefix` and baselines via `restoreArchive`. Both entry-level and complete-archive round-trip verification use the appropriate baseline for each namespace.
 
 ## About Patches
 

@@ -38,14 +38,19 @@ public final class ArchivePatches {
     }
 
     static Map<String,byte[]> restore(Map<String,byte[]> base, Map<String,byte[]> patch, String prefix) throws IOException {
+        return restore(base,Map.of(),patch,PatchLayout.of("patch/",prefix,""));
+    }
+
+    static Map<String,byte[]> restore(Map<String,byte[]> base,Map<String,byte[]> srgBase,Map<String,byte[]> patch,PatchLayout layout) throws IOException {
         var mappings=rules(patch); var result=new TreeMap<String,byte[]>();
         for(var entry:patch.entrySet()) {
             String name=entry.getKey();
-            if(name.startsWith("patch/") && name.endsWith(".md5"))continue;
-            if(name.startsWith("patch/") && name.endsWith(".xdelta")) {
-                String target=name.substring(6,name.length()-7),source=baseName(target,mappings,prefix);
-                ArchiveIO.require(base.containsKey(source),"Missing patch base: "+source);
-                byte[] data=GDiff.apply(base.get(source),entry.getValue());
+            if(name.startsWith(layout.root()) && name.endsWith(".md5"))continue;
+            if(name.startsWith(layout.root()) && name.endsWith(".xdelta")) {
+                String target=name.substring(layout.root().length(),name.length()-7),source=baseName(target,mappings,layout.prefix(target));
+                var selected=layout.isSrg(target)?srgBase:base;
+                ArchiveIO.require(selected.containsKey(source),"Missing "+(layout.isSrg(target)?"SRG":"Notch")+" patch base: "+source);
+                byte[] data=GDiff.apply(selected.get(source),entry.getValue());
                 byte[] expected=patch.get(name.substring(0,name.length()-7)+".md5");
                 ArchiveIO.require(expected!=null && ArchiveIO.hash(data,"MD5").equals(new String(expected,StandardCharsets.US_ASCII).trim()),"Patch MD5 mismatch: "+target);
                 ArchiveIO.require(result.put(target,data)==null,"Duplicate decoded target: "+target);
@@ -55,23 +60,28 @@ public final class ArchivePatches {
     }
 
     public static void generate(Path baseJar, Map<String,byte[]> target, Path output, String prefix) throws IOException {
-        var base=ArchiveIO.read(baseJar); var mappings=rules(target); var result=new TreeMap<String,byte[]>();
+        generate(ArchiveIO.read(baseJar),Map.of(),target,output,PatchLayout.of("patch/",prefix,""));
+    }
+
+    static void generate(Map<String,byte[]> base,Map<String,byte[]> srgBase,Map<String,byte[]> target,Path output,PatchLayout layout) throws IOException {
+        var mappings=rules(target); var result=new TreeMap<String,byte[]>();
         var encoder=new Delta();
         for(var entry:target.entrySet()) {
-            String name=entry.getKey(), source=baseName(name,mappings,prefix);
-            ArchiveIO.require(!(name.startsWith("patch/")&&(name.endsWith(".xdelta")||name.endsWith(".md5"))),"Target uses reserved patch entry name: "+name);
+            String name=entry.getKey(), source=baseName(name,mappings,layout.prefix(name));
+            var selected=layout.isSrg(name)?srgBase:base;
+            ArchiveIO.require(!layout.reserved(name),"Target uses reserved patch entry name: "+name);
             // A configured archive may only decode names covered by its mapping rules.
             // Keep other entries raw, including a directly readable installer manifest.
             boolean mapped=mappings.isEmpty() || mappings.keySet().stream().anyMatch(pattern->pattern.matcher(name).matches());
-            if(mapped && base.containsKey(source)) {
-                byte[] delta=encoder.compute(base.get(source),entry.getValue());
+            if(mapped && selected.containsKey(source)) {
+                byte[] delta=encoder.compute(selected.get(source),entry.getValue());
                 // Verify with our independent decoder, before committing the output archive.
-                ArchiveIO.require(Arrays.equals(entry.getValue(),GDiff.apply(base.get(source),delta)),"GDIFF roundtrip failed: "+name);
-                put(result,"patch/"+name+".xdelta",delta);
-                put(result,"patch/"+name+".md5",ArchiveIO.hash(entry.getValue(),"MD5").getBytes(StandardCharsets.US_ASCII));
+                ArchiveIO.require(Arrays.equals(entry.getValue(),GDiff.apply(selected.get(source),delta)),"GDIFF roundtrip failed: "+name);
+                put(result,layout.root()+name+".xdelta",delta);
+                put(result,layout.root()+name+".md5",ArchiveIO.hash(entry.getValue(),"MD5").getBytes(StandardCharsets.US_ASCII));
             } else put(result,name,entry.getValue());
         }
-        ArchiveIO.equal(target,restore(base,result,prefix));
+        ArchiveIO.equal(target,restore(base,srgBase,result,layout));
         ArchiveIO.write(output,result);
     }
 
@@ -95,13 +105,28 @@ public final class ArchivePatches {
     }
 
     static Map<String,byte[]> target(Path base,Path modified,Path template,String prefix,List<String> unprefixed,List<String> additional) throws IOException {
-        var incoming=ArchiveIO.read(modified); if(template==null)return incoming;
-        var target=restore(base,template,prefix);
+        return target(ArchiveIO.read(base),Map.of(),ArchiveIO.read(modified),Map.of(),template==null?null:ArchiveIO.read(template),
+            PatchLayout.of("patch/",prefix,""),unprefixed,additional);
+    }
+
+    static Map<String,byte[]> target(Map<String,byte[]> base,Map<String,byte[]> srgBase,Map<String,byte[]> notchIncoming,
+            Map<String,byte[]> srgIncoming,Map<String,byte[]> template,PatchLayout layout,List<String> unprefixed,List<String> additional) throws IOException {
+        var target=template==null?new TreeMap<String,byte[]>():restore(base,srgBase,template,layout);
+        overlay(target,notchIncoming,layout.notch(),false,template!=null,unprefixed,additional);
+        overlay(target,srgIncoming,layout.srg(),true,template!=null,unprefixed,additional);
+        return target;
+    }
+
+    private static void overlay(Map<String,byte[]> target,Map<String,byte[]> incoming,String prefix,boolean srg,boolean template,
+            List<String> unprefixed,List<String> additional) throws IOException {
         for(var entry:incoming.entrySet()) {
             String name=entry.getKey();
-            String key=name.endsWith(".class") && unprefixed.stream().noneMatch(name::startsWith)?prefix+name:name;
-            if(target.containsKey(key)||matches(name,additional))target.put(key,entry.getValue());
+            boolean shared=!name.endsWith(".class")||unprefixed.stream().anyMatch(name::startsWith);
+            // Shared resources and explicitly unprefixed classes are supplied by the Notch target once.
+            if(srg&&shared)continue;
+            String key=shared?name:prefix+name;
+            ArchiveIO.validateName(key);
+            if(!template||target.containsKey(key)||matches(name,additional))target.put(key,entry.getValue());
         }
-        return target;
     }
 }
