@@ -225,6 +225,26 @@ public class PatchgenPluginTest {
         assertEquals(TaskOutcome.UP_TO_DATE,runner("genSourcePatches").build().task(":genSourcePatches").getOutcome());
     }
 
+    @Test public void sourcePatchIndentationOptionIsWiredIntoGeneration() throws Exception {
+        ArchiveIO.write(project.resolve("mapped-sources.jar"),Map.of("Example.java","class Example {\n    int value;\n}\n".getBytes()));
+        Path source=project.resolve("src/main/java/Example.java");Files.createDirectories(source.getParent());
+        Files.writeString(source,"class Example {\n   int value;\n}\n");
+        Files.writeString(project.resolve("build.gradle"),"""
+
+            tasks.named('srg2mcp') {
+                enabled = false
+                input = file('mapped-sources.jar')
+                mappings = file('mapped-sources.jar')
+                output = file('mapped-sources.jar')
+            }
+            """,StandardOpenOption.APPEND);
+        runner("genSourcePatches").build();assertTrue(Files.exists(project.resolve("patches/Example.java.patch")));
+        Files.writeString(project.resolve("build.gradle"),"\npatchgen.ignoreSourceIndentation = true\n",StandardOpenOption.APPEND);
+        assertEquals(TaskOutcome.SUCCESS,runner("genSourcePatches").build().task(":genSourcePatches").getOutcome());
+        assertFalse(Files.exists(project.resolve("patches/Example.java.patch")));
+        assertEquals("class Example {\n   int value;\n}\n",Files.readString(source));
+    }
+
     @Test public void binaryTasksGenerateAndRestoreBothNamespacesWithCustomRoot() throws Exception {
         ArchiveIO.write(project.resolve("notch-base.jar"),Map.of("a.class","notch base".getBytes()));
         ArchiveIO.write(project.resolve("srg-base.jar"),Map.of("Game.class","srg base".getBytes()));

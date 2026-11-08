@@ -1,6 +1,7 @@
 package patchgen.gradle;
 
 import com.cloudbees.diff.Diff;
+import com.cloudbees.diff.Difference;
 import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -15,6 +16,10 @@ final class SourcePatches {
     private static final Pattern HUNK=Pattern.compile("@@ -(\\d+)(?:,(\\d+))? \\+(\\d+)(?:,(\\d+))? @@(?: .*)?");
 
     static void generate(Path baseArchive,Path sources,Path patches) throws IOException {
+        generate(baseArchive,sources,patches,false);
+    }
+
+    static void generate(Path baseArchive,Path sources,Path patches,boolean ignoreIndentation) throws IOException {
         separate(sources,patches);
         var base=ArchiveIO.read(baseArchive);
         var generated=new TreeMap<String,String>();
@@ -22,6 +27,7 @@ final class SourcePatches {
             String name=relative(sources,source);
             String target=text(Files.readAllBytes(source));
             String original=base.containsKey(name)?text(base.get(name)):"";
+            if(ignoreIndentation)target=alignIndentation(original,target);
             if(base.containsKey(name)&&original.equals(target))continue;
             // Include line terminators in the comparison so newline-only changes are not lost.
             var diff=Diff.diff(lines(original),lines(target),false);
@@ -37,6 +43,38 @@ final class SourcePatches {
         Files.createDirectories(patches);
         for(var entry:generated.entrySet())write(safe(patches,entry.getKey()),entry.getValue());
         for(Path file:stale)if(!generated.containsKey(relative(patches,file)))Files.delete(file);
+    }
+
+    /** Preserve baseline text on matched lines; changed/new lines retain the user's text. */
+    static String alignIndentation(String original,String target) throws IOException {
+        // Text-block indentation can change the value of a Java string. Keep such files exact.
+        // Conservatively include triple quotes in comments rather than risk altering a literal.
+        if(original.contains("\"\"\"")||target.contains("\"\"\""))return target;
+        var base=lines(original);var result=new ArrayList<>(lines(target));
+        var baseKeys=base.stream().map(SourcePatches::withoutIndentation).toList();
+        var targetKeys=result.stream().map(SourcePatches::withoutIndentation).toList();
+        int oldCursor=0,newCursor=0;
+        for(var change:Diff.diff(baseKeys,targetKeys,false)) {
+            int oldStart=change.getType()==Difference.ADD?change.getFirstStart():change.getFirstStart()-1;
+            int newStart=change.getType()==Difference.DELETE?change.getSecondStart():change.getSecondStart()-1;
+            while(oldCursor<oldStart&&newCursor<newStart) {
+                ArchiveIO.require(baseKeys.get(oldCursor).equals(targetKeys.get(newCursor)),"Invalid indentation alignment");
+                result.set(newCursor++,base.get(oldCursor++));
+            }
+            oldCursor=change.getType()==Difference.ADD?oldStart:change.getFirstEnd();
+            newCursor=change.getType()==Difference.DELETE?newStart:change.getSecondEnd();
+        }
+        while(oldCursor<base.size()&&newCursor<result.size()) {
+            ArchiveIO.require(baseKeys.get(oldCursor).equals(targetKeys.get(newCursor)),"Invalid trailing indentation alignment");
+            result.set(newCursor++,base.get(oldCursor++));
+        }
+        return String.join("",result);
+    }
+
+    private static String withoutIndentation(String line) {
+        int index=0;
+        while(index<line.length()&&(line.charAt(index)==' '||line.charAt(index)=='\t'))index++;
+        return line.substring(index);
     }
 
     static void restore(Path baseArchive,Path patches,Path sources) throws IOException {

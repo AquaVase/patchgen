@@ -94,6 +94,8 @@ Copy only Minecraft classes you want to edit from the attached MCP sources into 
 
 Both tasks obtain their baseline from ForgeGradle's `srg2mcp` output automatically, without compiling Minecraft or extracting its complete source tree. Source patches use diff4j 1.3 to generate unified diffs with three context lines, UTF-8 and LF line endings. Restoration validates paths, hunk ranges and exact context before writing any files. File-final newline differences are preserved; CRLF/CR line endings are normalized to LF.
 
+If recovered sources use different indentation from MCP, enable `patchgen.ignoreSourceIndentation = true` before running `genSourcePatches`. Matched lines that differ only in leading spaces/tabs then use the baseline's indentation, removing formatting-only changes from the patches. New and changed lines retain their own text, and working sources are not rewritten. Restored unchanged lines consequently use MCP indentation rather than reproducing the original workspace's indentation. Exact patch-context checks and round-trip verification remain enabled. Trailing whitespace, spaces inside code/string literals, annotations, modifiers, and parameter names are not ignored. Files containing Java text-block delimiters (`"""`) retain exact indentation, since indentation can affect string values.
+
 The source directory is a sparse set of overrides: Minecraft files absent from it are not treated as deletions, and files identical to the baseline produce no patches. Added classes use `/dev/null` as their baseline. Generation replaces matching `*.java.patch` files and removes stale ones in the configured patch directory; other files such as a README are preserved. Resources are outside these tasks' scope.
 
 Restoration explicitly overwrites files named by the patches, including local edits to those files, and preserves unrelated files. It does not delete overrides whose patches have been removed. Run it explicitly when initializing or resetting an editing workspace; it is not automatically run by setup or compilation. Keep patches in version control; generated Minecraft sources and `.patchgen/` should remain local. You can configure the directories:
@@ -115,6 +117,7 @@ patchgen {
 | `javaVersion` | 21; toolchain for game compilation and runtime |
 | `sourcesDirectory`, `runDirectory` | `src/main/java`, `run` |
 | `sourcePatchesDirectory` | `patches`; input/output directory for the source-patch tasks |
+| `ignoreSourceIndentation` | `false`; optionally omit differences consisting only of leading spaces/tabs on matched source lines |
 | `clientMainClass`, `serverMainClass` | `net.minecraft.client.main.Main`, `net.minecraft.server.Main` |
 | `baseJar` | Patch baseline JAR; defaults to the original Minecraft client JAR resolved and cached by ForgeGradle for `minecraftVersion` |
 | `modifiedJar` | The output of this project's `jar`; supports task providers. In dual mode this is the development-named input to both remapping tasks |

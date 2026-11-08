@@ -34,6 +34,7 @@ public class PatchgenPlugin implements Plugin<Project> {
         ext.getMappingVersion().convention(ext.getMinecraftVersion());ext.getJavaVersion().convention(21);
         ext.getSourcesDirectory().convention(project.getLayout().getProjectDirectory().dir("src/main/java"));
         ext.getSourcePatchesDirectory().convention(project.getLayout().getProjectDirectory().dir("patches"));
+        ext.getIgnoreSourceIndentation().convention(false);
         ext.getRunDirectory().convention(project.getLayout().getProjectDirectory().dir("run"));
         ext.getPatchRoot().convention("patch/");ext.getNotchPrefix().convention("");ext.getSrgPrefix().convention("");
         ext.getUnprefixedPackages().convention(List.of());ext.getAdditionalIncludes().convention(List.of());
@@ -79,6 +80,7 @@ public class PatchgenPlugin implements Plugin<Project> {
             task.getBaseSources().set(mappedSources);
             task.getSourcesDirectory().set(ext.getSourcesDirectory());
             task.getPatchesDirectory().set(ext.getSourcePatchesDirectory());
+            task.getIgnoreIndentation().set(ext.getIgnoreSourceIndentation());
         });
         project.getTasks().register("restoreSourceFromPatches",RestoreSourceFromPatchesTask.class,task->{
             task.setGroup("patchgen");task.setDescription("Restore patched and added Java sources from mapped MCP sources and source patches.");

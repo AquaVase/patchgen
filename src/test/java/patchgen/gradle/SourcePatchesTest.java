@@ -94,4 +94,55 @@ public class SourcePatchesTest {
         assertFalse(Files.exists(restored));
         assertThrows(IOException.class,()->SourcePatches.generate(base,sources,sources.resolve("patches")));
     }
+
+    @Test public void optionallyOmitsIndentationOnlyChangesWithoutEditingWorkingSources() throws Exception {
+        String original="class Example {\n    int value = 1;\n    void tick() {}\n}\n";
+        String target="class Example {\n   int value = 1;\n\tvoid tick() {}\n}\n";
+        baseline(Map.of("Example.java",original));source("Example.java",target);
+        SourcePatches.generate(base,sources,patches);
+        assertTrue(Files.exists(patches.resolve("Example.java.patch")));
+        SourcePatches.generate(base,sources,patches,true);
+        assertFalse(Files.exists(patches.resolve("Example.java.patch")));
+        assertEquals(target,Files.readString(sources.resolve("Example.java")));
+    }
+
+    @Test public void indentationAlignmentPreservesRealChangesAndRestoresUsingExactBaseContext() throws Exception {
+        String original="class Example {\n    int value = 1;\n    void tick() {}\n}\n";
+        String target="class Example {\n   int value = 2;\n   void tick() {}\n   void added() {}\n}\n";
+        String expected="class Example {\n   int value = 2;\n    void tick() {}\n   void added() {}\n}\n";
+        baseline(Map.of("Example.java",original));source("Example.java",target);
+        SourcePatches.generate(base,sources,patches,true);
+        String patch=Files.readString(patches.resolve("Example.java.patch"));
+        assertFalse(patch.contains("-    void tick()"));assertFalse(patch.contains("+   void tick()"));
+        assertTrue(patch.contains("+   int value = 2;"));assertTrue(patch.contains("+   void added()"));
+        SourcePatches.restore(base,patches,restored);
+        assertEquals(expected,Files.readString(restored.resolve("Example.java")));
+        assertEquals(target,Files.readString(sources.resolve("Example.java")));
+        assertThrows(IOException.class,()->SourcePatches.apply("Example.java",target.getBytes(StandardCharsets.UTF_8),patch));
+    }
+
+    @Test public void indentationAlignmentHandlesInsertDeleteRepeatedLinesAndFileBoundaries() throws Exception {
+        List<String> samples=List.of("","\n","  a","\ta\n","a\n  a\n","   b\n    a\n","   a\n   b\n   c\n",
+            "d\n   a\n  c\n","  a\n \n  b\n","a\nb\nc\nd\ne\nf\ng\nh\n");
+        for(String original:samples)for(String target:samples) {
+            String aligned=SourcePatches.alignIndentation(original,target);
+            assertEquals(target.replaceAll("(?m)^[ \\t]+",""),aligned.replaceAll("(?m)^[ \\t]+",""));
+            baseline(Map.of("Example.java",original));source("Example.java",target);
+            SourcePatches.generate(base,sources,patches,true);
+            if(aligned.equals(original))assertFalse(Files.exists(patches.resolve("Example.java.patch")));
+            else assertEquals(aligned,SourcePatches.apply("Example.java",original.getBytes(StandardCharsets.UTF_8),Files.readString(patches.resolve("Example.java.patch"))));
+        }
+    }
+
+    @Test public void indentationAlignmentPreservesLiteralContentTrailingSpacesAndTextBlocks() throws Exception {
+        assertEquals("   String value = \" a \";\n",SourcePatches.alignIndentation("    String value = \"a\";\n","   String value = \" a \";\n"));
+        assertEquals("   int a = 1;  \n",SourcePatches.alignIndentation("    int a = 1;\n","   int a = 1;  \n"));
+        String original="class A {\n    String s = \"\"\"\n        text\n        \"\"\";\n}\n";
+        String target=original.replace("    ","   ");
+        assertEquals(target,SourcePatches.alignIndentation(original,target));
+        baseline(Map.of("A.java",original));source("A.java",target);SourcePatches.generate(base,sources,patches,true);
+        SourcePatches.restore(base,patches,restored);assertEquals(target,Files.readString(restored.resolve("A.java")));
+        baseline(Map.of());source("New.java","   class New {}\n");SourcePatches.generate(base,sources,patches,true);
+        assertEquals("   class New {}\n",SourcePatches.apply("New.java",null,Files.readString(patches.resolve("New.java.patch"))));
+    }
 }
